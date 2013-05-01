@@ -1,0 +1,16 @@
+name:              imgtrans
+version:           0.1
+synopsis:          Simple image manipulation library and tool.
+author:            Stephen Hicks
+build-type:        Simple
+cabal-version:     >= 1.2
+
+library
+  exposed-modules: Sdh.Image
+  build-depends:   base >= 3 && < 5,
+                   JuicyPixels >= 3,
+                   colour >= 2.2.0
+
+executable imgtrans
+  main-is:         Main.hs
+  other-modules:   Sdh.Image
