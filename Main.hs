@@ -63,4 +63,5 @@ stretch2 img = transform img cubic xs ys
         s name val = trace (name ++ " = " ++ show val) val
         s' :: String -> [Double] -> [Double]
         s' name = map snd . s name . zip [0..]
-        bend a b n z = z * (n+2*(b-a))/n
+        -- bend a b n z = z * (n+2*(b-a))/n
+        bend = bendEdges
