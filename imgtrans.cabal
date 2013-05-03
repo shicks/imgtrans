@@ -9,7 +9,8 @@ library
   exposed-modules: Sdh.Image
   build-depends:   base >= 3 && < 5,
                    JuicyPixels >= 3,
-                   colour >= 2.2.0
+                   colour >= 2.2.0,
+                   split >= 0.1
 
 executable imgtrans
   main-is:         Main.hs
