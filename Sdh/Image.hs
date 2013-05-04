@@ -40,10 +40,6 @@ instance Averageable PixelRGB8 where
           fromPix :: PixelRGB8 -> Colour Double
           fromPix (PixelRGB8 r g b) = SRGB.sRGB24 r g b
 
--- | A convolution kernel.  Given fractional coordinates (x, y),
--- returns a list of integral coordinates and relative weights
-type Kernel a = a -> [(Int, Int, Double)]
-
 -- | A type that is able to get pixels.
 class Pixel p => ToPixel a p k | k -> a where
   -- | Reads a pixel from an image, possibly interpolating.
@@ -53,7 +49,7 @@ class Pixel p => ToPixel a p k | k -> a where
            -> p
 
 instance Averageable p => ToPixel a p (Kernel a) where
-  getPixel kernel img coords = average pixels
+  getPixel (Kernel kernel) img coords = average pixels
     where pixels = map (\(x', y', w) -> (w, pix x' y')) weights
           weights :: [(Int, Int, Double)]
           weights = kernel coords
@@ -64,6 +60,9 @@ instance Averageable p => ToPixel a p (Kernel a) where
                       | z >= b = b - 1
                       | otherwise = z
 
+-- | A generalized pair.  This is needed because we can't declare 
+-- @ToPixel (a, b) p k@ so we instead write @(Pair a b t, ToPixel t p k)@.
+-- @Pair a b p@ can essentially be read as @p = (a, b)@.
 class Pair a b p | p -> a b where 
   pFst :: p -> a
   pSnd :: p -> b
@@ -74,9 +73,14 @@ instance Pair a b (a, b) where
   pSnd = snd
   mkPair = (,)
 
+-- | A convolution kernel.  Given fractional coordinates (x, y),
+-- returns a list of integral coordinates and relative weights
+newtype Kernel a = Kernel (a -> [(Int, Int, Double)])
+
 -- | Generates a 2d convolution kernel from a 1d kernel.
 genKernel :: (a -> [(Int, Double)]) -> Kernel (a, a)
-genKernel f (x, y) = [(x', y', cx * cy) | (x', cx) <- f x, (y', cy) <- f y]
+genKernel f = Kernel kernel 
+  where kernel (x, y) = [(x', y', cx * cy) | (x', cx) <- f x, (y', cy) <- f y]
 
 -- | Cubic interpolation.  We have the formulas for a full
 -- (-2, 2) convolution, but we only use the nearest two pixels
@@ -119,14 +123,12 @@ toRgb (ImageY8 img) = JPT.promoteImage img
 toRgb (ImageYA8 img) = JPT.promoteImage img
 toRgb (ImageYCbCr8 img) = JP.pixelMap JPT.convertPixel img
 toRgb (ImageYF img) = JP.pixelMap pixelFtoPixelRGB img
+  where pixelFtoPixelRGB :: JPT.PixelF -> PixelRGB8
+        pixelFtoPixelRGB x = JPT.promotePixel $ (round $ x * 255 :: JPT.Pixel8)
 toRgb (ImageRGBF img) = JP.pixelMap pixelRGBFtoPixelRGB img
-
-pixelFtoPixelRGB :: JPT.PixelF -> PixelRGB8
-pixelFtoPixelRGB x = JPT.promotePixel $ (round $ x * 255 :: JPT.Pixel8)
-
-pixelRGBFtoPixelRGB :: JPT.PixelRGBF -> PixelRGB8
-pixelRGBFtoPixelRGB (JPT.PixelRGBF r g b) = PixelRGB8 (f r) (f g) (f b)
-  where f x = round $ x * 255
+  where pixelRGBFtoPixelRGB :: JPT.PixelRGBF -> PixelRGB8
+        pixelRGBFtoPixelRGB (JPT.PixelRGBF r g b) = PixelRGB8 (f r) (f g) (f b)
+        f x = round $ x * 255
 
 -- | Applies an arbitrary coordinate transformation.  The type @a@ is
 -- a generalized coordinate type, such as @(Double, Double)@.  The type
