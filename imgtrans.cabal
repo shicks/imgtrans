@@ -10,7 +10,8 @@ library
   build-depends:   base >= 3 && < 5,
                    JuicyPixels >= 3,
                    colour >= 2.2.0,
-                   split >= 0.1
+                   split >= 0.1,
+                   data-memocombinators >= 0.2
 
 executable imgtrans
   main-is:         Main.hs

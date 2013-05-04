@@ -1,3 +1,9 @@
+{-# LANGUAGE MultiParamTypeClasses, 
+             FunctionalDependencies, 
+             TypeSynonymInstances, 
+             FlexibleInstances, 
+             UndecidableInstances #-}
+
 module Sdh.Image where
 
 import Codec.Picture ( DynamicImage(..)
@@ -12,35 +18,7 @@ import Control.Arrow ( (***)
 import Data.Colour ( Colour(..) )
 import qualified Data.Colour as C
 import qualified Data.Colour.SRGB as SRGB
-
--- | A convolution kernel.  Given fractional coordinates (x, y),
--- returns a list of integral coordinates and relative weights
-type Kernel = Double -> Double -> [(Int, Int, Double)]
-
--- | Generates a 2d convolution kernel from a 1d kernel.
-genKernel :: (Double -> [(Int, Double)]) -> Kernel
-genKernel f x y = [(x', y', cx * cy) | (x', cx) <- f x, (y', cy) <- f y]
-
--- | Cubic interpolation.  We have the formulas for a full
--- (-2, 2) convolution, but we only use the nearest two pixels
--- in order to remain within gamut (since the next-nearest neighbors
--- have negative coefficients)
-cubic :: Kernel
-cubic = genKernel f
-  where f x | x == fromIntegral rx = [(rx, 1)]
-            | otherwise = [(fx - 1, poly $ x - fromIntegral fx + 1),
-                           (fx, poly $ x - fromIntegral fx),
-                           (cx, poly $ fromIntegral cx - x),
-                           (cx + 1, poly $ fromIntegral cx - x + 1)]
-          where rx = round x
-                fx = floor x
-                cx = ceiling x
-        poly x | x < 0 = poly $ -x
-               | x < 1 = 1.5 * x3 - 2.5 * x2 + 1
-               | x < 2 = -0.5 * x3 + 2.5 * x2 - 4 * x + 2
-               | otherwise = 0
-          where x2 = x * x
-                x3 = x2 * x
+import qualified Data.MemoCombinators as Memo
 
 -- | A color on which we can perform a weighted average.
 -- This is where we do all the connection between the
@@ -62,23 +40,76 @@ instance Averageable PixelRGB8 where
           fromPix :: PixelRGB8 -> Colour Double
           fromPix (PixelRGB8 r g b) = SRGB.sRGB24 r g b
 
--- | Reads a pixel from an image, possibly interpolating.
-getPixel :: Kernel           -- ^ Convolution kernel for interpolation
-         -> Image PixelRGB8  -- ^ Image to read pixels from
-         -> Double           -- ^ x coordinate
-         -> Double           -- ^ y coordinate
-         -> PixelRGB8
-getPixel kernel img x y = average pixels
-  where pixels :: [(Double, PixelRGB8)]
-        pixels = map (\(x', y', w) -> (w, pix x' y')) weights
-        weights :: [(Int, Int, Double)]
-        weights = kernel x y
-        width = imageWidth img
-        height = imageHeight img
-        pix x' y' = JP.pixelAt img (clamp 0 width x') (clamp 0 height y')
-        clamp a b z | z < a = a
-                    | z >= b = b - 1
-                    | otherwise = z
+-- | A convolution kernel.  Given fractional coordinates (x, y),
+-- returns a list of integral coordinates and relative weights
+type Kernel a = a -> [(Int, Int, Double)]
+
+-- | A type that is able to get pixels.
+class Pixel p => ToPixel a p k | k -> a where
+  -- | Reads a pixel from an image, possibly interpolating.
+  getPixel :: k          -- ^ Kernel for interpolation
+           -> Image p    -- ^ Image to read pixels from
+           -> a          -- ^ Generalized coordinate(s)
+           -> p
+
+instance Averageable p => ToPixel a p (Kernel a) where
+  getPixel kernel img coords = average pixels
+    where pixels = map (\(x', y', w) -> (w, pix x' y')) weights
+          weights :: [(Int, Int, Double)]
+          weights = kernel coords
+          width = imageWidth img
+          height = imageHeight img
+          pix x' y' = JP.pixelAt img (clamp 0 width x') (clamp 0 height y')
+          clamp a b z | z < a = a
+                      | z >= b = b - 1
+                      | otherwise = z
+
+class Pair a b p | p -> a b where 
+  pFst :: p -> a
+  pSnd :: p -> b
+  mkPair :: a -> b -> p
+
+instance Pair a b (a, b) where
+  pFst = fst
+  pSnd = snd
+  mkPair = (,)
+
+-- | Generates a 2d convolution kernel from a 1d kernel.
+genKernel :: (a -> [(Int, Double)]) -> Kernel (a, a)
+genKernel f (x, y) = [(x', y', cx * cy) | (x', cx) <- f x, (y', cy) <- f y]
+
+-- | Cubic interpolation.  We have the formulas for a full
+-- (-2, 2) convolution, but we only use the nearest two pixels
+-- in order to remain within gamut (since the next-nearest neighbors
+-- have negative coefficients)
+cubic :: Kernel (Double, Double)
+cubic = genKernel f
+  where f x | x == fromIntegral rx = [(rx, 1)]
+            | otherwise = [(fx - 1, poly $ x - fromIntegral fx + 1),
+                           (fx, poly $ x - fromIntegral fx),
+                           (cx, poly $ fromIntegral cx - x),
+                           (cx + 1, poly $ fromIntegral cx - x + 1)]
+          where rx = round x
+                fx = floor x
+                cx = ceiling x
+        poly x | x < 0 = poly $ -x
+               | x < 1 = 1.5 * x3 - 2.5 * x2 + 1
+               | x < 2 = -0.5 * x3 + 2.5 * x2 - 4 * x + 2
+               | otherwise = 0
+          where x2 = x * x
+                x3 = x2 * x
+
+-- | Gaussian blur.  This is a convolution kernel where the "pixel"
+-- to return is not just a position but also the blur radius along
+-- the given direction, i.e. (Int, Int).
+gaussian :: Kernel ((Int, Int), (Int, Int))
+gaussian = genKernel f
+  where f (x, dx) = map (\(dx, z) -> (x + dx, z)) $ g dx
+        g :: Int -> [(Int, Double)]
+        g = Memo.integral $ g' . fromIntegral
+        g' :: Double -> [(Int, Double)]
+        g' s = let vals = map (\x -> exp (-x^2 / (2*s^2))) [1..s]
+               in (0, 1) : zip [1..] vals ++ zip [-1, -2..] vals
 
 -- | Converts a DynamicImage type to a simple RGB8 image.
 toRgb :: DynamicImage -> Image PixelRGB8
@@ -97,30 +128,35 @@ pixelRGBFtoPixelRGB :: JPT.PixelRGBF -> PixelRGB8
 pixelRGBFtoPixelRGB (JPT.PixelRGBF r g b) = PixelRGB8 (f r) (f g) (f b)
   where f x = round $ x * 255
 
--- | Applies an arbitrary coordinate transformation.
-transform2d :: Image PixelRGB8  -- ^ Source image
-            -> Kernel           -- ^ Interpolation kernel
-            -> (Int -> Int -> (Double, Double)) 
-                -- ^ Coordinate transformation (target-to-source)
-            -> Int              -- ^ Width of generated image
-            -> Int              -- ^ Height of generated image
-            -> Image PixelRGB8
+-- | Applies an arbitrary coordinate transformation.  The type @a@ is
+-- a generalized coordinate type, such as @(Double, Double)@.  The type
+-- @p@ is the pixel type, which may need to be averagable depending on
+-- the kernel type @k@, which is probably a 'Kernel' @a@.
+transform2d :: ToPixel a p k
+            => Image p           -- ^ Source image
+            -> k                 -- ^ Interpolation kernel
+            -> (Int -> Int -> a) -- ^ Coordinate transform (target-to-source)
+            -> Int               -- ^ Width of generated image
+            -> Int               -- ^ Height of generated image
+            -> Image p
 transform2d img kernel func = JP.generateImage generator
-  where generator x y = let (x', y') = func x y 
-                        in getPixel kernel img x' y'
+  where generator x y = getPixel kernel img $ func x y
 
--- | Applies an arbitrary coordinate transformation.
-transform :: Image PixelRGB8  -- ^ Source image
-          -> Kernel           -- ^ Interpolation kernel
-          -> [Double]         -- ^ X coordinate transform
-          -> [Double]         -- ^ Y coordinate transform
-          -> Image PixelRGB8
+-- | Applies an arbitrary coordinate transformation.  We use a generalized pair,
+-- probably for no good reason.  Essentially the type @k@ is 'Kernel' @(a, b)@, but
+-- another 'ToPixel' instance may be used instead.
+transform :: (Pair a b t, ToPixel t p k)
+          => Image p    -- ^ Source image
+          -> k          -- ^ Interpolation kernel
+          -> [a]        -- ^ X coordinate transform
+          -> [b]        -- ^ Y coordinate transform
+          -> Image p
 transform img kernel xt yt  = snd $ JP.generateFoldImage generator 
-                                          (xt, yt) width height
+                                    (xt, yt) width height
   where generator s x y = gen s
         gen ([], []) = error "fold called too often"
         gen ([], y:ys) = gen (xt, ys)
-        gen (x:xs, y:ys) = ((xs, y:ys), getPixel kernel img x y)
+        gen (x:xs, y:ys) = ((xs, y:ys), getPixel kernel img (mkPair x y))
         width = length xt
         height = length yt
 

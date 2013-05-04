@@ -18,6 +18,7 @@ import Sdh.Image ( toRgb
                  , rangeMap
                  , inverse
                  , cubic
+                 , gaussian
                  )
 import System.Environment ( getArgs )
 
@@ -28,6 +29,7 @@ help = unlines [ "Usage: imgtrans <infile> <command [args]>... <outfile>"
                , "  -stretch square"
                , "  -bend <ax>:<bx>:<ay>:<by>"
                , "  -bend square"
+               , "  -blur <radius>"
                , "  -fade ...?"
                ]
 
@@ -57,6 +59,7 @@ type Img = Image PixelRGB8
 commands :: [(String, String -> Img -> Either String Img)]
 commands = [ ("stretch", stretchImage)
            , ("bend", bendImage)
+           , ("blur", blurImage)
            -- , ("fade", fadeImage)
            ]
 
@@ -102,6 +105,12 @@ bendImage arg img
                 pair :: Int -> (Int, Int)
                 pair dz | dz < 0 = (-2 * dz, -dz)
                         | otherwise = (dz, 2 * dz)
+
+blurImage :: String -> Img -> Either String Img
+blurImage arg img
+  | Just r <- maybeRead arg = Right $ transform2d img gaussian (\x y -> ((x, r), (y, r)))
+                                                  (imageWidth img) (imageHeight img)
+  | otherwise = Left $ "Could not parse argument to blur: " ++ arg
 
 squareImage :: Img -> (Int, Int, Int, Int)
 squareImage img = (x, y, x', y') 
