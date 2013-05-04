@@ -56,23 +56,53 @@ type Img = Image PixelRGB8
 
 commands :: [(String, String -> Img -> Either String Img)]
 commands = [ ("stretch", stretchImage)
-           -- , ("bend", bendImage)
+           , ("bend", bendImage)
            -- , ("fade", fadeImage)
            ]
 
 stretchImage :: String -> Img -> Either String Img
 stretchImage arg img 
   | arg == "square" = let (x, y, x', y') = squareImage img
-                      in Right $ stretch' (x' ./. x) (y' ./. y) img
+                      in Right $ stretch' (x' ./. x) (y' ./. y)
   | [Just xs, Just ys] <- map maybeRead $ splitOn ":" arg 
-                    = Right $ stretch' xs ys img
+                    = Right $ stretch' xs ys
   | otherwise = Left $ "Could not parse argument to stretch: " ++ arg
-  where stretch' :: Double -> Double -> Img -> Img
-        stretch' xs ys img = transform2d img cubic transf xl yl
+  where stretch' :: Double -> Double -> Img
+        stretch' xs ys = transform2d img cubic transf xl yl
           where transf x y = (x ./. xs, y ./. ys)
                 xl = round $ imageWidth img .*. xs
                 yl = round $ imageHeight img .*. ys
         
+bendImage :: String -> Img -> Either String Img
+bendImage arg img
+  | arg == "square" = let (x, y, x', y') = squareImage img
+                      in Right $ bend'' x y x' y'
+  | [Just ax, Just bx, Just ay, Just by] <- map maybeRead $ splitOn ":" arg
+                    = Right $ bend' ax bx ay by
+  | otherwise = Left $ "Could not parse argument to bend: " ++ arg
+  where bend' :: Int -> Int -> Int -> Int -> Img
+        bend' ax bx ay by = transform img cubic xs ys
+          where xt = if ax < bx 
+                     then inverse $ be ax bx x
+                     else be bx ax x'
+                yt = if ay < by
+                     then inverse $ be ay by y
+                     else be by ay y'
+                xs = rangeMap xt x'
+                ys = rangeMap yt y'
+                x = imageWidth img
+                y = imageHeight img
+                x' = x + 2 * (bx - ax)
+                y' = y + 2 * (by - ay)
+                be a b z = bendEdges (toDouble a) (toDouble b) (toDouble z)
+        bend'' :: Int -> Int -> Int -> Int -> Img
+        bend'' x y x' y' = bend' ax bx ay by
+          where (ax, bx) = "(ax, bx)" =$ pair $ (x' - x) `div` 2
+                (ay, by) = "(ay, by)" =$ pair $ (y' - y) `div` 2
+                pair :: Int -> (Int, Int)
+                pair dz | dz < 0 = (-2 * dz, -dz)
+                        | otherwise = (dz, 2 * dz)
+
 squareImage :: Img -> (Int, Int, Int, Int)
 squareImage img = (x, y, x', y') 
   where img' = tr "squareImage" img
