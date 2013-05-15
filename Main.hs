@@ -5,7 +5,7 @@ module Main where
 import Debug.Trace
 import Codec.Picture ( DynamicImage
                      , Image(..)
-                     , PixelRGB8
+                     , PixelRGB8(..)
                      , readImage
                      , writePng
                      )
@@ -19,6 +19,13 @@ import Sdh.Image ( toRgb
                  , inverse
                  , cubic
                  , gaussian
+                 , mix
+                 , memoize
+                 , lazyImage
+                 , generateImage
+                 , LazyImage(..)
+                 , HasPixels(..)
+                 , ToPixel(..)
                  )
 import System.Environment ( getArgs )
 
@@ -30,7 +37,7 @@ help = unlines [ "Usage: imgtrans <infile> <command [args]>... <outfile>"
                , "  -bend <ax>:<bx>:<ay>:<by>"
                , "  -bend square"
                , "  -blur <radius>"
-               , "  -fade ...?"
+               , "  -fade <r>:<dx>:<fade>"
                ]
 
 class ToDouble a where
@@ -60,7 +67,7 @@ commands :: [(String, String -> Img -> Either String Img)]
 commands = [ ("stretch", stretchImage)
            , ("bend", bendImage)
            , ("blur", blurImage)
-           -- , ("fade", fadeImage)
+           , ("fade", fadeRightEdge)
            ]
 
 stretchImage :: String -> Img -> Either String Img
@@ -112,6 +119,48 @@ blurImage arg img
                                                   (imageWidth img) (imageHeight img)
   | otherwise = Left $ "Could not parse argument to blur: " ++ arg
 
+-- Can we build some sort of monad/DSL for building up a transformation function
+-- which might include recursive lookups, interpolation, fades/mixes, blurs, etc?
+-- Build up a 2d array?  chain of functions for where to get the pixel from?
+--   - but what if we want the cubic interpolation of a spiral twist?
+
+-- fadeRightEdge :: String -> 
+
+fadeRightEdge :: String -> Img -> Either String Img
+fadeRightEdge arg img
+  | [Just r, Just rs, Just dx, Just fade] <- map maybeRead $ splitOn ":" arg 
+              = Right $ doFade (round r) (round rs) (round dx) fade
+  | otherwise = Left $ "Could not parse argument to fade: " ++ arg
+  where doFade :: Int -> Int -> Int -> Double -> Img
+        doFade r rs dx fade = generateImage lazy
+          where orig = lazyImage img
+                width = pixelWidth orig
+                lazy = memoize $ LazyImage (width + dx) (pixelHeight orig) proc
+                proc :: Int -> Int -> PixelRGB8
+                proc x y | x <= width - r * rs = pixelAt orig x y
+                         | x < width = let sigma = (x - width + r * rs) `div` rs
+                                       in getPixel gaussian orig ((x, sigma), (y, sigma))
+                         | otherwise = mix black fade $
+                                       getPixel gaussian lazy ((x-1, 0), (y, r))
+                black = PixelRGB8 0 0 0
+
+-- TODO(sdh): use a mask to determine distance from the object and then
+-- use that to determine the blur at that radius, up to a certain constant.
+-- How to build distance as a function of pixel...?  graph traversal?  flood fill?
+
+-- closest pixel to mask:
+--   closestPixel :: Int -> Int -> (Int, Int, Double)
+--   closestPixel x y = for x' y' in x+-1, y+-1 do
+--                        min x' y'
+--   might want to start with the mask itself and expand outwards, using
+--   pythagoras to keep distances accurate...
+-- This could turn an image with a black center and white outside to generate
+-- a black-to-white (or white-to-black for sharper contrast) gradient eminating
+-- from the original mask, which could be used later for blurring, desaturating,
+-- etc.  What does a color fade look like, where it starts full color but ends B&W?
+
+-- To find out, we'll need to add some sort of mask support.
+
 squareImage :: Img -> (Int, Int, Int, Int)
 squareImage img = (x, y, x', y') 
   where img' = tr "squareImage" img
@@ -139,7 +188,7 @@ process :: [String] -> Img -> Either String (String, Img)
 process (filename:[]) img = Right (filename, img)
 process (('-':cmd):arg:rest) img 
   | Just cmd' <- lookup cmd commands = cmd' arg img >>= process rest
-process _ _ = Left help
+process (cmd:_) _ = Left $ "Unknown command: " ++ cmd ++ "\n" ++ help
 
 stretch :: Image PixelRGB8 -> Double -> Double -> Image PixelRGB8
 stretch img xs ys = transform2d img cubic transf xl yl
