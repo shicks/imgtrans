@@ -15,6 +15,7 @@ import Sdh.Image ( toRgb
                  , transform2d
                  , transform
                  , bendEdges
+                 , distanceMask  
                  , rangeMap
                  , inverse
                  , cubic
@@ -38,6 +39,7 @@ help = unlines [ "Usage: imgtrans <infile> <command [args]>... <outfile>"
                , "  -bend square"
                , "  -blur <radius>"
                , "  -fade <r>:<dx>:<fade>"
+               , "  -distance <r>"
                ]
 
 class ToDouble a where
@@ -67,6 +69,7 @@ commands :: [(String, String -> Img -> Either String Img)]
 commands = [ ("stretch", stretchImage)
            , ("bend", bendImage)
            , ("blur", blurImage)
+           , ("distance", distanceMaskImage)
            , ("fade", fadeRightEdge)
            ]
 
@@ -118,6 +121,11 @@ blurImage arg img
   | Just r <- maybeRead arg = Right $ transform2d img gaussian (\x y -> ((x, r), (y, r)))
                                                   (imageWidth img) (imageHeight img)
   | otherwise = Left $ "Could not parse argument to blur: " ++ arg
+
+distanceMaskImage :: String -> Img -> Either String Img
+distanceMaskImage arg img 
+  | Just r <- maybeRead arg = Right $ distanceMask r img
+  | otherwise = Left $ "Could not parse argument to distance: " ++ arg
 
 -- Can we build some sort of monad/DSL for building up a transformation function
 -- which might include recursive lookups, interpolation, fades/mixes, blurs, etc?

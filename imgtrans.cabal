@@ -8,10 +8,12 @@ cabal-version:     >= 1.2
 library
   exposed-modules: Sdh.Image
   build-depends:   base >= 3 && < 5,
-                   JuicyPixels >= 3,
+                   array >= 0.1,
                    colour >= 2.2.0,
+                   containers >= 0.1,
+                   data-memocombinators >= 0.2,
                    split >= 0.1,
-                   data-memocombinators >= 0.2
+                   JuicyPixels >= 3
 
 executable imgtrans
   main-is:         Main.hs

@@ -2,6 +2,7 @@
              FunctionalDependencies, 
              TypeSynonymInstances, 
              FlexibleInstances, 
+             PatternGuards,
              UndecidableInstances #-}
 
 module Sdh.Image where
@@ -13,12 +14,38 @@ import Codec.Picture ( DynamicImage(..)
                      )
 import qualified Codec.Picture as JP
 import qualified Codec.Picture.Types as JPT
-import Control.Arrow ( (***) 
+import Control.Arrow ( (***) )
+import Control.Monad.ST ( ST(..)
+                        , runST 
+                        )
+import Control.Monad ( foldM )
+
+import Data.Array.IArray ( Array
+                         , (!) 
+                         )
+import Data.Array.MArray ( newListArray )
+import Data.Array.ST ( STArray(..)
+                     , newArray_
+                     , readArray
+                     , writeArray
+                     , runSTArray
+                     , thaw
+                     , freeze
                      )
+import Data.Array ( listArray
+                  , range
+                  )
+import Data.Array.Unboxed ( UArray )
 import Data.Colour ( Colour(..) )
 import qualified Data.Colour as C
 import qualified Data.Colour.SRGB as SRGB
 import qualified Data.MemoCombinators as Memo
+import qualified Data.Sequence as S
+import Data.Sequence ( (|>), ViewL(..), viewl )
+--import Data.STRef ( newSTRef 
+--                  , readSTRef
+--                  , modifySTRef'
+--                  )
 
 -- | A color on which we can perform a weighted average.
 -- This is where we do all the connection between the
@@ -27,6 +54,9 @@ class Pixel p => Averageable p where
   -- | Performs a weighted average.
   average :: [(Double, p)]  -- ^ Pairs of (weight, color)
           -> p
+  isBlack :: p -> Bool
+  black :: p
+  white :: p
 
 instance Averageable PixelRGB8 where
   average [] = error "Cannot average empty list" 
@@ -39,6 +69,10 @@ instance Averageable PixelRGB8 where
                     in PixelRGB8 r g b
           fromPix :: PixelRGB8 -> Colour Double
           fromPix (PixelRGB8 r g b) = SRGB.sRGB24 r g b
+  isBlack (PixelRGB8 0 0 0) = True
+  isBlack _ = False
+  black = PixelRGB8 0 0 0
+  white = PixelRGB8 255 255 255
 
 -- | A generalized image.  @HasPixels p i@ should be read as @i = Image p@.
 class HasPixels p i | i -> p where
@@ -287,3 +321,75 @@ inverse f y = root (\x -> f x - y)
                 iter x1 y1 x2 y2 = let x0 = x1 - y1 * (x1 - x2) / (y1 - y2)
                                        y0 = f' x0
                                    in iter x0 y0 x1 y1
+
+-- * TODO: move this to a separate package to make it private...?
+
+-- | Internal data structure for working out distances.
+data DistancePixel = Black | Gray Int Int | White
+  deriving ( Ord, Eq, Show )
+
+-- | Takes an image of blacks and non-blacks.  Returns an image
+-- where each pixel is a color representing the distance to the
+-- nearest black, where black is 0 and white is the given radius
+-- or more.
+distanceMask :: Averageable p
+             => Double -- ^ The radius for white
+             -> Image p -- ^ The input image of blacks and non-blacks
+             -> Image p
+distanceMask r source = runST $ do
+     arr <- newListArray (start, end) [initialPixel x y | (x, y) <- allPixels]
+     run arr $ S.fromList $ filter 
+               (\(x, y) -> isBlack $ pixelAt source x y) allPixels
+  where start = (0, 0)
+        end = (width - 1, height - 1)
+        allPixels = range (start, end)
+        width = imageWidth source
+        height = imageHeight source
+        initialPixel :: Int -> Int -> DistancePixel
+        initialPixel x y = case pixelAt source x y of
+          p | isBlack p -> Black
+            | otherwise -> White
+        toImage :: Averageable p => Array (Int, Int) DistancePixel -> Image p
+        toImage arr = JP.generateImage f width height
+          where f x y = case arr ! (x, y) of
+                  Black -> black
+                  White -> white
+                  Gray dx dy -> average [(dr, white), (r - dr, black)]
+                    where dr = min r $ sqrt $ fromIntegral $ dx^2 + dy^2
+        run :: Averageable p => STArray s (Int, Int) DistancePixel -> S.Seq (Int, Int) -> ST s (Image p)
+        run arr queue 
+            | S.null queue = toImage `fmap` freeze arr
+            | next :< rest <- viewl queue = do p <- readArray arr next
+                                               run' next arr rest p
+        run' :: Averageable p => (Int, Int) -> STArray s (Int, Int) DistancePixel -> S.Seq (Int, Int) -> DistancePixel -> ST s (Image p)
+        run' next arr rest Black =
+          do queue <- foldM (check arr next (0, 0)) rest
+                      [(1, 0), (0, 1), (-1, 0), (0, -1)]
+             run arr queue
+        run' next arr rest (Gray dx dy) =
+          do queue <- foldM (check arr next (dx, dy)) rest
+                      [(1, 0), (0, 1), (-1, 0), (0, -1)]
+             run arr queue
+        run' next arr rest White = run arr rest
+                                                      
+        -- checks a single direction, updating the array and optionally adding to the queue
+        check :: STArray s (Int, Int) DistancePixel -> (Int, Int) -> (Int, Int) -> S.Seq (Int, Int) -> (Int, Int) -> ST s (S.Seq (Int, Int))
+        check _ (x, _) _ q (ux, _) | x + ux >= width || x + ux < 0 = return q
+        check _ (_, y) _ q (_, uy) | y + uy >= height || y + uy < 0 = return q
+        check arr (x, y) (dx, dy) queue (ux, uy) = do
+          let x' = x + ux
+              y' = y + uy
+              dx' = dx + ux
+              dy' = dy + uy
+              dr2 = dx'^2 + dy'^2
+              dist = if fromIntegral dr2 < r^2 
+                     then Gray dx' dy'
+                     else White
+          neighbor <- readArray arr (x', y')
+          case neighbor of
+            White -> do writeArray arr (x', y') dist
+                        return $ queue |> (x', y')
+            Gray dx2 dy2 | dx2^2 + dy2^2 > dr2 ->
+                     do writeArray arr (x', y') dist
+                        return $ queue |> (x', y')
+            _ -> return queue
