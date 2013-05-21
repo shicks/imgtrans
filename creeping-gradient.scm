@@ -1,9 +1,7 @@
-(define (script-fu-incremental-blur
+(define (script-fu-creeping-gradient
          inImage
          inDrawable
-         inIncrement
-         inRadius
-         inSteps)
+         inRadius)
   (gimp-undo-push-group-start inImage)
   (let ((layer (car (gimp-layer-copy inDrawable 1)))
         (channel (car (gimp-selection-save inImage))))
